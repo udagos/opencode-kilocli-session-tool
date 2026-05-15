@@ -1,12 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -188,7 +189,7 @@ def render_lines(app: str, db_path: Path, sessions: list[Session], index: int) -
         lines.append((style, f"   {s.sid}\n"))
         lines.append((style, f"   {s.directory or '(no directory)'}\n"))
         lines.append((style, f"   last: {human_time(s.updated_at)} ({format_dt(s.updated_at)})\n\n"))
-    lines.append(("", f"↑/↓ move  Enter resume  q quit   showing {top + 1}-{end} of {len(sessions)}\n"))
+    lines.append(("", f"UP/DOWN move  Enter resume  q quit   showing {top + 1}-{end} of {len(sessions)}\n"))
     return FormattedText(lines)
 
 
@@ -238,13 +239,33 @@ def run_tui(backend: str, label: str) -> int:
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if not args or args[0] in {"-h", "--help"}:
-        print("usage: osm <launcher-name>")
+    
+    json_mode = False
+    if "--json" in args:
+        json_mode = True
+        args.remove("--json")
+        
+    if not json_mode and (not args or args[0] in {"-h", "--help"}):
+        print("usage: osm <launcher-name> [--json]")
         print("       optional: OSM_APP=opencode|kilo")
         return 0
 
-    label = args[0]
+    label = args[0] if args else "opencode"
     backend, db_path = detect_backend(label)
+    
+    if json_mode:
+        if not db_path.exists():
+            print("[]")
+            return 0
+        sessions = load_sessions(backend)
+        out = []
+        for s in sessions:
+            d = asdict(s)
+            d["display_title"] = s.display_title
+            out.append(d)
+        print(json.dumps(out))
+        return 0
+
     if not db_path.exists():
         print(f"No sessions DB found for {backend}: {db_path}", file=sys.stderr)
         return 2
@@ -254,3 +275,5 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

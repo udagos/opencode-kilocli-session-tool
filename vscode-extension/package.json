@@ -1,0 +1,92 @@
+{
+  "name": "osm-vscode",
+  "displayName": "OpenCode Session Manager",
+  "description": "Manage and resume OpenCode and Kilo sessions from VSCode",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "osm.refresh",
+        "title": "Refresh OSM Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "osm.resumeSession",
+        "title": "Resume Session",
+        "icon": "$(play)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "osm-explorer",
+          "title": "OSM Sessions",
+          "icon": "$(list-tree)"
+        }
+      ]
+    },
+    "views": {
+      "osm-explorer": [
+        {
+          "id": "osm.sessionsView",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "osm.refresh",
+          "when": "view == osm.sessionsView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "osm.resumeSession",
+          "when": "view == osm.sessionsView && viewItem == session",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OSM",
+      "properties": {
+        "osm.backend": {
+          "type": "string",
+          "enum": ["opencode", "kilo"],
+          "default": "kilo",
+          "description": "The backend to use for OSM (opencode or kilo)"
+        },
+        "osm.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to the python executable (e.g., 'python', 'python3', or absolute path)"
+        },
+        "osm.scriptPath": {
+          "type": "string",
+          "default": "osm",
+          "description": "Path or command to run osm. If installed globally via uv/pip, just 'osm' works. If local, provide the full path to osm.py."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}
