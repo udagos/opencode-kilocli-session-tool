@@ -8,6 +8,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
 
     private service: OsmService;
     private sessions: ISession[] = [];
+    private searchQuery: string | undefined;
 
     constructor(service: OsmService) {
         this.service = service;
@@ -17,53 +18,97 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
         this._onDidChangeTreeData.fire();
     }
 
+    setSearchQuery(query: string | undefined): void {
+        this.searchQuery = query;
+        this.refresh();
+    }
+
     getTreeItem(element: SessionNode): vscode.TreeItem {
         return element;
     }
 
     async getChildren(element?: SessionNode): Promise<SessionNode[]> {
         if (!element) {
-            // Root level: fetch sessions and group by directory
-            this.sessions = await this.service.fetchSessions();
+            // Root level: fetch sessions
+            const config = vscode.workspace.getConfiguration('osm');
+            const sortBy = config.get<string>('sortBy') || 'time_updated';
+            const sortOrder = config.get<string>('sortOrder') || 'DESC';
+
+            this.sessions = await this.service.fetchSessions(this.searchQuery, sortBy, sortOrder);
 
             if (this.sessions.length === 0) {
                 return [];
             }
 
-            // Group by directory
-            const projectsMap = new Map<string, ISession[]>();
+            if (this.searchQuery) {
+                // Flat list for search results
+                return this.sessions.map(s => new SessionItemNode(s));
+            }
+
+            // Top-Level Nodes
+            const topNodes: SessionNode[] = [];
+
+            const pinnedSessions = this.sessions.filter(s => s.is_pinned);
+            if (pinnedSessions.length > 0) {
+                topNodes.push(new TopLevelCategoryNode('📌 Pinned', pinnedSessions));
+            }
+
+            const labeledSessionsMap = new Map<string, ISession[]>();
             for (const session of this.sessions) {
-                const dir = session.directory || '(No Directory)';
-                if (!projectsMap.has(dir)) {
-                    projectsMap.set(dir, []);
+                if (session.labels && session.labels.length > 0) {
+                    for (const label of session.labels) {
+                        if (label.trim() === '') continue;
+                        if (!labeledSessionsMap.has(label)) {
+                            labeledSessionsMap.set(label, []);
+                        }
+                        labeledSessionsMap.get(label)!.push(session);
+                    }
                 }
-                projectsMap.get(dir)!.push(session);
             }
 
-            // Create Project nodes
-            const projectNodes: ProjectNode[] = [];
-            for (const [dir, projectSessions] of projectsMap.entries()) {
-                const folderName = dir === '(No Directory)' ? dir : path.basename(dir);
-                projectNodes.push(new ProjectNode(folderName, dir, projectSessions));
+            if (labeledSessionsMap.size > 0) {
+                const labelNodes: SessionNode[] = [];
+                for (const [label, sessions] of labeledSessionsMap.entries()) {
+                    labelNodes.push(new TopLevelCategoryNode(`🏷️ ${label}`, sessions));
+                }
+                labelNodes.sort((a, b) => a.label.localeCompare(b.label));
+                topNodes.push(new FolderNode('🏷️ By Label', labelNodes));
             }
 
-            // Sort projects alphabetically
-            projectNodes.sort((a, b) => a.label.localeCompare(b.label));
+            topNodes.push(new FolderNode('📁 All Projects', this.getProjectNodes(this.sessions)));
 
-            return projectNodes;
-        } else if (element instanceof ProjectNode) {
-            // Child level: return sessions for this project
-            const sessionNodes = element.sessions.map(s => new SessionItemNode(s));
-            // Sort sessions by updated_at descending
-            sessionNodes.sort((a, b) => {
-                const timeA = a.session.updated_at || 0;
-                const timeB = b.session.updated_at || 0;
-                return timeB - timeA;
-            });
-            return sessionNodes;
+            return topNodes;
+        } else if (element instanceof FolderNode) {
+            return element.children;
+        } else if (element instanceof TopLevelCategoryNode) {
+            return element.sessions.map(s => new SessionItemNode(s));
         }
 
         return [];
+    }
+
+    private getProjectNodes(sessions: ISession[]): SessionNode[] {
+        const projectsMap = new Map<string, ISession[]>();
+        for (const session of sessions) {
+            const dir = session.directory || '(No Directory)';
+            if (!projectsMap.has(dir)) {
+                projectsMap.set(dir, []);
+            }
+            projectsMap.get(dir)!.push(session);
+        }
+
+        const projectNodes: TopLevelCategoryNode[] = [];
+        for (const [dir, projectSessions] of projectsMap.entries()) {
+            const folderName = dir === '(No Directory)' ? dir : path.basename(dir);
+            const node = new TopLevelCategoryNode(folderName, projectSessions);
+            node.description = dir;
+            node.tooltip = dir;
+            node.iconPath = new vscode.ThemeIcon('folder');
+            projectNodes.push(node);
+        }
+
+        projectNodes.sort((a, b) => a.label.localeCompare(b.label));
+        return projectNodes;
     }
 }
 
@@ -76,17 +121,23 @@ export abstract class SessionNode extends vscode.TreeItem {
     }
 }
 
-export class ProjectNode extends SessionNode {
+export class FolderNode extends SessionNode {
     constructor(
         public readonly label: string,
-        public readonly fullPath: string,
+        public readonly children: SessionNode[]
+    ) {
+        super(label, vscode.TreeItemCollapsibleState.Expanded);
+        this.contextValue = 'folder';
+    }
+}
+
+export class TopLevelCategoryNode extends SessionNode {
+    constructor(
+        public readonly label: string,
         public readonly sessions: ISession[]
     ) {
         super(label, vscode.TreeItemCollapsibleState.Collapsed);
-        this.tooltip = this.fullPath;
-        this.description = this.fullPath;
-        this.iconPath = new vscode.ThemeIcon('folder');
-        this.contextValue = 'project';
+        this.contextValue = 'category';
     }
 }
 
@@ -94,11 +145,25 @@ export class SessionItemNode extends SessionNode {
     constructor(
         public readonly session: ISession
     ) {
-        super(session.display_title, vscode.TreeItemCollapsibleState.None);
-        this.tooltip = `ID: ${session.sid}\nLast updated: ${this.formatTime(session.updated_at)}`;
-        this.description = this.getHumanTime(session.updated_at);
+        super(session.is_pinned ? `📌 ${session.display_title}` : session.display_title, vscode.TreeItemCollapsibleState.None);
+
+        let tooltipText = `ID: ${session.sid}\nLast updated: ${this.formatTime(session.updated_at)}`;
+        if (session.labels && session.labels.length > 0) {
+            tooltipText += `\nLabels: ${session.labels.join(', ')}`;
+        }
+        if (session.note) {
+            tooltipText += `\nNote: ${session.note}`;
+        }
+        this.tooltip = tooltipText;
+
+        let desc = this.getHumanTime(session.updated_at);
+        if (session.note) {
+            desc += ` - 📝 ${session.note}`;
+        }
+        this.description = desc;
+
         this.iconPath = new vscode.ThemeIcon('comment-discussion');
-        this.contextValue = 'session';
+        this.contextValue = session.is_pinned ? 'session_pinned' : 'session';
     }
 
     private formatTime(timestamp: number | null): string {

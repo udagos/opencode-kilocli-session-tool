@@ -19,9 +19,52 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "osm.searchSessions",
+        "title": "Search Sessions",
+        "icon": "$(search)"
+      },
+      {
+        "command": "osm.clearSearch",
+        "title": "Clear Search",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "osm.setSort",
+        "title": "Set Sorting Options",
+        "icon": "$(sort-precedence)"
+      },
+      {
         "command": "osm.resumeSession",
         "title": "Resume Session",
         "icon": "$(play)"
+      },
+      {
+        "command": "osm.viewSessionContent",
+        "title": "View Session Content",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "osm.deleteSession",
+        "title": "Delete Session",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "osm.togglePin",
+        "title": "Toggle Pin",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "osm.setNote",
+        "title": "Add/Edit Note"
+      },
+      {
+        "command": "osm.addLabel",
+        "title": "Add Label",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "osm.removeLabel",
+        "title": "Remove Label"
       }
     ],
     "viewsContainers": {
@@ -44,16 +87,61 @@
     "menus": {
       "view/title": [
         {
+          "command": "osm.searchSessions",
+          "when": "view == osm.sessionsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "osm.clearSearch",
+          "when": "view == osm.sessionsView && osm.searchActive",
+          "group": "navigation@2"
+        },
+        {
+          "command": "osm.setSort",
+          "when": "view == osm.sessionsView",
+          "group": "navigation@3"
+        },
+        {
           "command": "osm.refresh",
           "when": "view == osm.sessionsView",
-          "group": "navigation"
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
         {
           "command": "osm.resumeSession",
-          "when": "view == osm.sessionsView && viewItem == session",
-          "group": "inline"
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "inline@1"
+        },
+        {
+          "command": "osm.viewSessionContent",
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "inline@2"
+        },
+        {
+          "command": "osm.togglePin",
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "inline@3"
+        },
+        {
+          "command": "osm.addLabel",
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "inline@4"
+        },
+        {
+          "command": "osm.deleteSession",
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "inline@5"
+        },
+        {
+          "command": "osm.setNote",
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "modification@1"
+        },
+        {
+          "command": "osm.removeLabel",
+          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "group": "modification@2"
         }
       ]
     },
@@ -62,7 +150,10 @@
       "properties": {
         "osm.backend": {
           "type": "string",
-          "enum": ["opencode", "kilo"],
+          "enum": [
+            "opencode",
+            "kilo"
+          ],
           "default": "kilo",
           "description": "The backend to use for OSM (opencode or kilo)"
         },
@@ -75,6 +166,18 @@
           "type": "string",
           "default": "osm",
           "description": "Path or command to run osm. If installed globally via uv/pip, just 'osm' works. If local, provide the full path to osm.py."
+        },
+        "osm.sortBy": {
+          "type": "string",
+          "enum": ["time_updated", "time_created", "title"],
+          "default": "time_updated",
+          "description": "Default sorting field for sessions"
+        },
+        "osm.sortOrder": {
+          "type": "string",
+          "enum": ["DESC", "ASC"],
+          "default": "DESC",
+          "description": "Default sorting order for sessions"
         }
       }
     }
