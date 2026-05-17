@@ -152,7 +152,40 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
             projectNodes.push(new ProjectNode(folderName, projectSessions.map(s => new SessionItemNode(s)), folderMeta));
         }
 
-        projectNodes.sort((a, b) => a.label.localeCompare(b.label));
+        // Apply same sorting to folders
+        const config = vscode.workspace.getConfiguration('osm');
+        const sortBy = config.get<string>('sortBy') || 'time_updated';
+        const sortOrder = config.get<string>('sortOrder') || 'DESC';
+
+        projectNodes.sort((a, b) => {
+            let valA: any = 0;
+            let valB: any = 0;
+
+            if (sortBy === 'title') {
+                valA = a.label;
+                valB = b.label;
+                if (sortOrder === 'ASC') {
+                    return valA.localeCompare(valB);
+                } else {
+                    return valB.localeCompare(valA);
+                }
+            } else if (sortBy === 'time_updated') {
+                // Get max updated time from sessions inside this folder
+                valA = Math.max(...a.children.map((c: any) => c.session?.updated_at || 0));
+                valB = Math.max(...b.children.map((c: any) => c.session?.updated_at || 0));
+            } else if (sortBy === 'time_created') {
+                // Get min created time from sessions inside this folder
+                valA = Math.max(...a.children.map((c: any) => c.session?.created_at || 0));
+                valB = Math.max(...b.children.map((c: any) => c.session?.created_at || 0));
+            }
+
+            if (sortOrder === 'ASC') {
+                return valA > valB ? 1 : -1;
+            } else {
+                return valA < valB ? 1 : -1;
+            }
+        });
+
         return projectNodes;
     }
 }

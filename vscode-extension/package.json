@@ -120,12 +120,12 @@
         },
         {
           "command": "osm.togglePin",
-          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "when": "view == osm.sessionsView && (viewItem =~ /session/ || viewItem =~ /project/ || viewItem == 'folder')",
           "group": "inline@3"
         },
         {
           "command": "osm.addLabel",
-          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "when": "view == osm.sessionsView && (viewItem =~ /session/ || viewItem =~ /project/ || viewItem == 'folder')",
           "group": "inline@4"
         },
         {
@@ -135,12 +135,12 @@
         },
         {
           "command": "osm.setNote",
-          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "when": "view == osm.sessionsView && (viewItem =~ /session/ || viewItem =~ /project/ || viewItem == 'folder')",
           "group": "modification@1"
         },
         {
           "command": "osm.removeLabel",
-          "when": "view == osm.sessionsView && viewItem =~ /session/",
+          "when": "view == osm.sessionsView && (viewItem =~ /session/ || viewItem =~ /project/ || viewItem == 'folder')",
           "group": "modification@2"
         }
       ]
