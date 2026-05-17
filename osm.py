@@ -41,6 +41,13 @@ class Session:
         cleaned = SUBAGENT_TITLE_RE.sub("", self.title.strip())
         return cleaned or "(untitled)"
 
+@dataclass
+class FolderMeta:
+    directory: str
+    is_pinned: bool = False
+    note: str | None = None
+    labels: list[str] = field(default_factory=list)
+
 
 def get_env_path(*names: str) -> str | None:
     for name in names:
@@ -104,6 +111,19 @@ def init_meta_db(meta_db_path: Path) -> None:
                 PRIMARY KEY (session_id, label)
             )
         """)
+        # Schema migration: Add 'type' column
+        try:
+            conn.execute("ALTER TABLE pins ADD COLUMN type TEXT DEFAULT 'session'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE notes ADD COLUMN type TEXT DEFAULT 'session'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE labels ADD COLUMN type TEXT DEFAULT 'session'")
+        except sqlite3.OperationalError:
+            pass
 
 
 def detect_backend(preferred: str | None = None) -> tuple[str, Path, Path]:
@@ -152,6 +172,46 @@ def format_dt(value: int | None) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def load_folder_meta(app: str) -> list[FolderMeta]:
+    meta_db_path = resolve_meta_db_path(app)
+    if not meta_db_path.exists():
+        return []
+
+    try:
+        with sqlite3.connect(meta_db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT 
+                    COALESCE(p.session_id, n.session_id, l.session_id) as directory,
+                    p.pinned_at,
+                    n.note,
+                    GROUP_CONCAT(l.label) as labels
+                FROM (SELECT DISTINCT session_id FROM pins WHERE type='folder'
+                      UNION SELECT DISTINCT session_id FROM notes WHERE type='folder'
+                      UNION SELECT DISTINCT session_id FROM labels WHERE type='folder') as all_ids
+                LEFT JOIN pins p ON all_ids.session_id = p.session_id AND p.type='folder'
+                LEFT JOIN notes n ON all_ids.session_id = n.session_id AND n.type='folder'
+                LEFT JOIN labels l ON all_ids.session_id = l.session_id AND l.type='folder'
+                GROUP BY all_ids.session_id
+            """).fetchall()
+    except sqlite3.Error:
+        return []
+
+    folders = []
+    for row in rows:
+        labels_raw = row["labels"]
+        labels_list = labels_raw.split(",") if labels_raw else []
+        folders.append(
+            FolderMeta(
+                directory=str(row["directory"] or ""),
+                is_pinned=bool(row["pinned_at"]),
+                note=row["note"],
+                labels=labels_list
+            )
+        )
+    return folders
+
+
 def load_sessions(app: str, search_query: str | None = None, sort_by: str = "time_updated", sort_order: str = "DESC") -> list[Session]:
     db_path = resolve_db_path(app)
     if not db_path.exists():
@@ -176,9 +236,9 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
                         p.pinned_at, n.note, GROUP_CONCAT(l.label) as labels
                     FROM session s
                     LEFT JOIN message m ON s.id = m.session_id
-                    LEFT JOIN meta.pins p ON s.id = p.session_id
-                    LEFT JOIN meta.notes n ON s.id = n.session_id
-                    LEFT JOIN meta.labels l ON s.id = l.session_id
+                    LEFT JOIN meta.pins p ON s.id = p.session_id AND (p.type = 'session' OR p.type IS NULL)
+                    LEFT JOIN meta.notes n ON s.id = n.session_id AND (n.type = 'session' OR n.type IS NULL)
+                    LEFT JOIN meta.labels l ON s.id = l.session_id AND (l.type = 'session' OR l.type IS NULL)
                     WHERE s.title LIKE ? OR m.data LIKE ?
                     GROUP BY s.id
                     ORDER BY {sort_field} {sort_order}
@@ -191,9 +251,9 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
                         s.id, s.title, s.directory, s.time_created, s.time_updated,
                         p.pinned_at, n.note, GROUP_CONCAT(l.label) as labels
                     FROM session s
-                    LEFT JOIN meta.pins p ON s.id = p.session_id
-                    LEFT JOIN meta.notes n ON s.id = n.session_id
-                    LEFT JOIN meta.labels l ON s.id = l.session_id
+                    LEFT JOIN meta.pins p ON s.id = p.session_id AND (p.type = 'session' OR p.type IS NULL)
+                    LEFT JOIN meta.notes n ON s.id = n.session_id AND (n.type = 'session' OR n.type IS NULL)
+                    LEFT JOIN meta.labels l ON s.id = l.session_id AND (l.type = 'session' OR l.type IS NULL)
                     GROUP BY s.id
                     ORDER BY {sort_field} {sort_order}
                 """
@@ -252,9 +312,9 @@ def delete_session(app: str, session_id: str) -> None:
     if meta_db_path.exists():
         try:
             with sqlite3.connect(meta_db_path) as meta_conn:
-                meta_conn.execute("DELETE FROM pins WHERE session_id = ?", (session_id,))
-                meta_conn.execute("DELETE FROM notes WHERE session_id = ?", (session_id,))
-                meta_conn.execute("DELETE FROM labels WHERE session_id = ?", (session_id,))
+                meta_conn.execute("DELETE FROM pins WHERE session_id = ? AND (type = 'session' OR type IS NULL)", (session_id,))
+                meta_conn.execute("DELETE FROM notes WHERE session_id = ? AND (type = 'session' OR type IS NULL)", (session_id,))
+                meta_conn.execute("DELETE FROM labels WHERE session_id = ? AND (type = 'session' OR type IS NULL)", (session_id,))
                 meta_conn.commit()
         except sqlite3.Error:
             pass
@@ -403,11 +463,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--sort-order", choices=["DESC", "ASC"], default="DESC", help="Sort order")
     
     # Meta actions
-    parser.add_argument("--pin", metavar="SID", help="Pin a session")
-    parser.add_argument("--unpin", metavar="SID", help="Unpin a session")
-    parser.add_argument("--set-note", nargs=2, metavar=("SID", "NOTE"), help="Set a note for a session")
-    parser.add_argument("--add-label", nargs=2, metavar=("SID", "LABEL"), help="Add a label to a session")
-    parser.add_argument("--remove-label", nargs=2, metavar=("SID", "LABEL"), help="Remove a label from a session")
+    parser.add_argument("--type", choices=["session", "folder"], default="session", help="Type of metadata target")
+    parser.add_argument("--pin", metavar="ID", help="Pin a session or folder")
+    parser.add_argument("--unpin", metavar="ID", help="Unpin a session or folder")
+    parser.add_argument("--set-note", nargs=2, metavar=("ID", "NOTE"), help="Set a note for a session or folder")
+    parser.add_argument("--add-label", nargs=2, metavar=("ID", "LABEL"), help="Add a label to a session or folder")
+    parser.add_argument("--remove-label", nargs=2, metavar=("ID", "LABEL"), help="Remove a label from a session or folder")
 
     args, unknown = parser.parse_known_args(list(sys.argv[1:] if argv is None else argv))
     
@@ -428,42 +489,47 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
         
     if args.pin:
-        execute_meta_update(backend, "INSERT OR REPLACE INTO pins (session_id, pinned_at) VALUES (?, ?)", (args.pin, int(time.time() * 1000)))
+        execute_meta_update(backend, "INSERT OR REPLACE INTO pins (session_id, pinned_at, type) VALUES (?, ?, ?)", (args.pin, int(time.time() * 1000), args.type))
         return 0
         
     if args.unpin:
-        execute_meta_update(backend, "DELETE FROM pins WHERE session_id = ?", (args.unpin,))
+        execute_meta_update(backend, "DELETE FROM pins WHERE session_id = ? AND type = ?", (args.unpin, args.type))
         return 0
         
     if args.set_note:
-        sid, note = args.set_note
+        target_id, note = args.set_note
         if not note.strip():
-            execute_meta_update(backend, "DELETE FROM notes WHERE session_id = ?", (sid,))
+            execute_meta_update(backend, "DELETE FROM notes WHERE session_id = ? AND type = ?", (target_id, args.type))
         else:
-            execute_meta_update(backend, "INSERT OR REPLACE INTO notes (session_id, note, updated_at) VALUES (?, ?, ?)", (sid, note, int(time.time() * 1000)))
+            execute_meta_update(backend, "INSERT OR REPLACE INTO notes (session_id, note, updated_at, type) VALUES (?, ?, ?, ?)", (target_id, note, int(time.time() * 1000), args.type))
         return 0
         
     if args.add_label:
-        sid, lbl = args.add_label
-        execute_meta_update(backend, "INSERT OR IGNORE INTO labels (session_id, label) VALUES (?, ?)", (sid, lbl.strip()))
+        target_id, lbl = args.add_label
+        execute_meta_update(backend, "INSERT OR IGNORE INTO labels (session_id, label, type) VALUES (?, ?, ?)", (target_id, lbl.strip(), args.type))
         return 0
         
     if args.remove_label:
-        sid, lbl = args.remove_label
-        execute_meta_update(backend, "DELETE FROM labels WHERE session_id = ? AND label = ?", (sid, lbl.strip()))
+        target_id, lbl = args.remove_label
+        execute_meta_update(backend, "DELETE FROM labels WHERE session_id = ? AND label = ? AND type = ?", (target_id, lbl.strip(), args.type))
         return 0
 
     if args.json:
         if not db_path.exists():
-            print("[]")
+            print(json.dumps({"sessions": [], "folders": []}))
             return 0
         sessions = load_sessions(backend, search_query=args.search, sort_by=args.sort_by, sort_order=args.sort_order)
-        out = []
+        folders = load_folder_meta(backend)
+        
+        sess_out = []
         for s in sessions:
             d = asdict(s)
             d["display_title"] = s.display_title
-            out.append(d)
-        print(json.dumps(out))
+            sess_out.append(d)
+            
+        fold_out = [asdict(f) for f in folders]
+        
+        print(json.dumps({"sessions": sess_out, "folders": fold_out}))
         return 0
 
     if not db_path.exists():

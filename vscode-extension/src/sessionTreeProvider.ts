@@ -34,9 +34,22 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
             const sortBy = config.get<string>('sortBy') || 'time_updated';
             const sortOrder = config.get<string>('sortOrder') || 'DESC';
 
-            this.sessions = await this.service.fetchSessions(this.searchQuery, sortBy, sortOrder);
+            const data: any = await this.service.fetchSessions(this.searchQuery, sortBy, sortOrder);
 
-            if (this.sessions.length === 0) {
+            // Check if the old structure is returned (array of sessions) or new structure (object with sessions and folders)
+            let sessionsData: ISession[] = [];
+            let foldersData: any[] = [];
+
+            if (Array.isArray(data)) {
+                sessionsData = data;
+            } else if (data && typeof data === 'object') {
+                sessionsData = data.sessions || [];
+                foldersData = data.folders || [];
+            }
+
+            this.sessions = sessionsData;
+
+            if (this.sessions.length === 0 && foldersData.length === 0) {
                 return [];
             }
 
@@ -48,46 +61,75 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
             // Top-Level Nodes
             const topNodes: SessionNode[] = [];
 
+            // Pinned Section
             const pinnedSessions = this.sessions.filter(s => s.is_pinned);
-            if (pinnedSessions.length > 0) {
-                topNodes.push(new TopLevelCategoryNode('📌 Pinned', pinnedSessions));
-            }
+            const pinnedFolders = foldersData.filter(f => f.is_pinned);
 
-            const labeledSessionsMap = new Map<string, ISession[]>();
-            for (const session of this.sessions) {
-                if (session.labels && session.labels.length > 0) {
-                    for (const label of session.labels) {
-                        if (label.trim() === '') continue;
-                        if (!labeledSessionsMap.has(label)) {
-                            labeledSessionsMap.set(label, []);
-                        }
-                        labeledSessionsMap.get(label)!.push(session);
-                    }
+            if (pinnedSessions.length > 0 || pinnedFolders.length > 0) {
+                const pinnedNodes: SessionNode[] = [];
+                if (pinnedFolders.length > 0) {
+                    pinnedNodes.push(new FolderNode('📁 Projects', pinnedFolders.map(f => this.createProjectNode(f, this.sessions))));
                 }
+                if (pinnedSessions.length > 0) {
+                    pinnedNodes.push(new FolderNode('💬 Sessions', pinnedSessions.map(s => new SessionItemNode(s))));
+                }
+                topNodes.push(new FolderNode('📌 Pinned', pinnedNodes));
             }
 
-            if (labeledSessionsMap.size > 0) {
+            // Labels Section
+            const allLabels = new Set<string>();
+            for (const s of this.sessions) {
+                if (s.labels) s.labels.forEach(l => { if(l.trim()) allLabels.add(l.trim()); });
+            }
+            for (const f of foldersData) {
+                if (f.labels) f.labels.forEach((l: string) => { if(l.trim()) allLabels.add(l.trim()); });
+            }
+
+            if (allLabels.size > 0) {
                 const labelNodes: SessionNode[] = [];
-                for (const [label, sessions] of labeledSessionsMap.entries()) {
-                    labelNodes.push(new TopLevelCategoryNode(`🏷️ ${label}`, sessions));
+                const sortedLabels = Array.from(allLabels).sort();
+
+                for (const label of sortedLabels) {
+                    const sessionsWithLabel = this.sessions.filter(s => s.labels && s.labels.includes(label));
+                    const foldersWithLabel = foldersData.filter(f => f.labels && f.labels.includes(label));
+
+                    const labelSubNodes: SessionNode[] = [];
+                    if (foldersWithLabel.length > 0) {
+                        labelSubNodes.push(new FolderNode('📁 Projects', foldersWithLabel.map(f => this.createProjectNode(f, this.sessions))));
+                    }
+                    if (sessionsWithLabel.length > 0) {
+                        labelSubNodes.push(new FolderNode('💬 Sessions', sessionsWithLabel.map(s => new SessionItemNode(s))));
+                    }
+
+                    labelNodes.push(new FolderNode(`🏷️ ${label}`, labelSubNodes));
                 }
-                labelNodes.sort((a, b) => a.label.localeCompare(b.label));
                 topNodes.push(new FolderNode('🏷️ By Label', labelNodes));
             }
 
-            topNodes.push(new FolderNode('📁 All Projects', this.getProjectNodes(this.sessions)));
+            // All Projects Section
+            topNodes.push(new FolderNode('📁 All Projects', this.getProjectNodes(this.sessions, foldersData)));
 
             return topNodes;
-        } else if (element instanceof FolderNode) {
+        } else if (element instanceof FolderNode || element instanceof ProjectNode) {
             return element.children;
-        } else if (element instanceof TopLevelCategoryNode) {
-            return element.sessions.map(s => new SessionItemNode(s));
         }
 
         return [];
     }
 
-    private getProjectNodes(sessions: ISession[]): SessionNode[] {
+    private createProjectNode(folderMeta: any, allSessions: ISession[]): ProjectNode {
+        const dir = folderMeta.directory;
+        const projectSessions = allSessions.filter(s => s.directory === dir);
+        const folderName = dir === '(No Directory)' || !dir ? '(No Directory)' : path.basename(dir);
+
+        return new ProjectNode(
+            folderName,
+            projectSessions.map(s => new SessionItemNode(s)),
+            folderMeta
+        );
+    }
+
+    private getProjectNodes(sessions: ISession[], foldersData: any[]): SessionNode[] {
         const projectsMap = new Map<string, ISession[]>();
         for (const session of sessions) {
             const dir = session.directory || '(No Directory)';
@@ -97,14 +139,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
             projectsMap.get(dir)!.push(session);
         }
 
-        const projectNodes: TopLevelCategoryNode[] = [];
+        const projectNodes: ProjectNode[] = [];
         for (const [dir, projectSessions] of projectsMap.entries()) {
+            const folderMeta = foldersData.find(f => f.directory === dir) || {
+                directory: dir,
+                is_pinned: false,
+                note: null,
+                labels: []
+            };
+
             const folderName = dir === '(No Directory)' ? dir : path.basename(dir);
-            const node = new TopLevelCategoryNode(folderName, projectSessions);
-            node.description = dir;
-            node.tooltip = dir;
-            node.iconPath = new vscode.ThemeIcon('folder');
-            projectNodes.push(node);
+            projectNodes.push(new ProjectNode(folderName, projectSessions.map(s => new SessionItemNode(s)), folderMeta));
         }
 
         projectNodes.sort((a, b) => a.label.localeCompare(b.label));
@@ -131,13 +176,30 @@ export class FolderNode extends SessionNode {
     }
 }
 
-export class TopLevelCategoryNode extends SessionNode {
+export class ProjectNode extends SessionNode {
     constructor(
         public readonly label: string,
-        public readonly sessions: ISession[]
+        public readonly children: SessionNode[],
+        public readonly folderMeta: any
     ) {
-        super(label, vscode.TreeItemCollapsibleState.Collapsed);
-        this.contextValue = 'category';
+        super(folderMeta.is_pinned ? `📌 ${label}` : label, vscode.TreeItemCollapsibleState.Collapsed);
+        this.contextValue = folderMeta.is_pinned ? 'project_pinned' : 'project';
+
+        let tooltipText = `Directory: ${folderMeta.directory}`;
+        if (folderMeta.labels && folderMeta.labels.length > 0) {
+            tooltipText += `\nLabels: ${folderMeta.labels.join(', ')}`;
+        }
+        if (folderMeta.note) {
+            tooltipText += `\nNote: ${folderMeta.note}`;
+        }
+        this.tooltip = tooltipText;
+
+        let desc = folderMeta.directory;
+        if (folderMeta.note) {
+            desc += ` - 📝 ${folderMeta.note}`;
+        }
+        this.description = desc;
+        this.iconPath = new vscode.ThemeIcon('folder');
     }
 }
 

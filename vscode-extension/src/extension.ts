@@ -110,49 +110,114 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Command: Toggle Pin
-    const pinCommand = vscode.commands.registerCommand('osm.togglePin', async (node: SessionItemNode) => {
-        if (!node || !node.session) return;
-        const willPin = !node.session.is_pinned;
-        await osmService.pinSession(node.session.sid, willPin);
+    const pinCommand = vscode.commands.registerCommand('osm.togglePin', async (node: any) => {
+        if (!node) return;
+
+        let targetId = '';
+        let targetType = 'session';
+        let willPin = false;
+
+        if (node.session) {
+            targetId = node.session.sid;
+            willPin = !node.session.is_pinned;
+        } else if (node.folderMeta) {
+            targetId = node.folderMeta.directory;
+            targetType = 'folder';
+            willPin = !node.folderMeta.is_pinned;
+        } else {
+            return;
+        }
+
+        await osmService.pinSession(targetId, willPin, targetType);
         sessionTreeProvider.refresh();
     });
 
     // Command: Add/Edit Note
-    const setNoteCommand = vscode.commands.registerCommand('osm.setNote', async (node: SessionItemNode) => {
-        if (!node || !node.session) return;
+    const setNoteCommand = vscode.commands.registerCommand('osm.setNote', async (node: any) => {
+        if (!node) return;
+
+        let targetId = '';
+        let targetType = 'session';
+        let currentNote = '';
+
+        if (node.session) {
+            targetId = node.session.sid;
+            currentNote = node.session.note || '';
+        } else if (node.folderMeta) {
+            targetId = node.folderMeta.directory;
+            targetType = 'folder';
+            currentNote = node.folderMeta.note || '';
+        } else {
+            return;
+        }
+
         const note = await vscode.window.showInputBox({
-            prompt: 'Enter a note for this session (leave empty to remove)',
-            value: node.session.note || ''
+            prompt: 'Enter a note (leave empty to remove)',
+            value: currentNote
         });
+
         if (note !== undefined) {
-            await osmService.setNote(node.session.sid, note);
+            await osmService.setNote(targetId, note, targetType);
             sessionTreeProvider.refresh();
         }
     });
 
     // Command: Add Label
-    const addLabelCommand = vscode.commands.registerCommand('osm.addLabel', async (node: SessionItemNode) => {
-        if (!node || !node.session) return;
+    const addLabelCommand = vscode.commands.registerCommand('osm.addLabel', async (node: any) => {
+        if (!node) return;
+
+        let targetId = '';
+        let targetType = 'session';
+
+        if (node.session) {
+            targetId = node.session.sid;
+        } else if (node.folderMeta) {
+            targetId = node.folderMeta.directory;
+            targetType = 'folder';
+        } else {
+            return;
+        }
+
         const label = await vscode.window.showInputBox({
-            prompt: 'Enter a new label for this session'
+            prompt: 'Enter a new label'
         });
+
         if (label && label.trim().length > 0) {
-            await osmService.addLabel(node.session.sid, label.trim());
+            await osmService.addLabel(targetId, label.trim(), targetType);
             sessionTreeProvider.refresh();
         }
     });
 
     // Command: Remove Label
-    const removeLabelCommand = vscode.commands.registerCommand('osm.removeLabel', async (node: SessionItemNode) => {
-        if (!node || !node.session || !node.session.labels || node.session.labels.length === 0) {
+    const removeLabelCommand = vscode.commands.registerCommand('osm.removeLabel', async (node: any) => {
+        if (!node) return;
+
+        let targetId = '';
+        let targetType = 'session';
+        let labels: string[] = [];
+
+        if (node.session) {
+            targetId = node.session.sid;
+            labels = node.session.labels || [];
+        } else if (node.folderMeta) {
+            targetId = node.folderMeta.directory;
+            targetType = 'folder';
+            labels = node.folderMeta.labels || [];
+        } else {
+            return;
+        }
+
+        if (labels.length === 0) {
             vscode.window.showInformationMessage('No labels to remove.');
             return;
         }
-        const label = await vscode.window.showQuickPick(node.session.labels, {
+
+        const label = await vscode.window.showQuickPick(labels, {
             placeHolder: 'Select a label to remove'
         });
+
         if (label) {
-            await osmService.removeLabel(node.session.sid, label);
+            await osmService.removeLabel(targetId, label, targetType);
             sessionTreeProvider.refresh();
         }
     });
