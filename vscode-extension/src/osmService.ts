@@ -92,7 +92,7 @@ export class OsmService {
 
     public async deleteSession(sid: string): Promise<void> {
         try {
-            const result = await this.executeBackend(`--delete "${sid}"`);
+            const result = await this.executeBackend(`--json --delete "${sid}"`);
             if (result && result.status === 'error') {
                 vscode.window.showErrorMessage(`Error deleting session: ${result.message}`);
             }
@@ -105,7 +105,7 @@ export class OsmService {
     public async pinSession(sid: string, pin: boolean): Promise<void> {
         const flag = pin ? '--pin' : '--unpin';
         try {
-            await this.executeBackend(`${flag} "${sid}"`);
+            await this.executeBackend(`--json ${flag} "${sid}"`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`Failed to pin/unpin session. Error: ${error.message}`);
         }
@@ -114,7 +114,7 @@ export class OsmService {
     public async setNote(sid: string, note: string): Promise<void> {
         const safeNote = note.replace(/"/g, '\\"');
         try {
-            await this.executeBackend(`--set-note "${sid}" "${safeNote}"`);
+            await this.executeBackend(`--json --set-note "${sid}" "${safeNote}"`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`Failed to set note. Error: ${error.message}`);
         }
@@ -123,7 +123,7 @@ export class OsmService {
     public async addLabel(sid: string, label: string): Promise<void> {
         const safeLabel = label.replace(/"/g, '\\"');
         try {
-            await this.executeBackend(`--add-label "${sid}" "${safeLabel}"`);
+            await this.executeBackend(`--json --add-label "${sid}" "${safeLabel}"`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`Failed to add label. Error: ${error.message}`);
         }
@@ -132,7 +132,7 @@ export class OsmService {
     public async removeLabel(sid: string, label: string): Promise<void> {
         const safeLabel = label.replace(/"/g, '\\"');
         try {
-            await this.executeBackend(`--remove-label "${sid}" "${safeLabel}"`);
+            await this.executeBackend(`--json --remove-label "${sid}" "${safeLabel}"`);
         } catch (error: any) {
             vscode.window.showErrorMessage(`Failed to remove label. Error: ${error.message}`);
         }
