@@ -118,9 +118,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
     }
 
     private createProjectNode(folderMeta: any, allSessions: ISession[]): ProjectNode {
-        const dir = folderMeta.directory;
-        const projectSessions = allSessions.filter(s => s.directory === dir);
-        const folderName = dir === '(No Directory)' || !dir ? '(No Directory)' : path.basename(dir);
+        const id = folderMeta.workspace_id || folderMeta.directory;
+        const projectSessions = allSessions.filter(s => (s.workspace_id || s.directory) === id);
+        const folderName = folderMeta.directory === '(No Directory)' || !folderMeta.directory ? '(No Directory)' : path.basename(folderMeta.directory);
 
         return new ProjectNode(
             folderName,
@@ -132,22 +132,24 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
     private getProjectNodes(sessions: ISession[], foldersData: any[]): SessionNode[] {
         const projectsMap = new Map<string, ISession[]>();
         for (const session of sessions) {
-            const dir = session.directory || '(No Directory)';
-            if (!projectsMap.has(dir)) {
-                projectsMap.set(dir, []);
+            const key = session.workspace_id || session.directory || '(No Directory)';
+            if (!projectsMap.has(key)) {
+                projectsMap.set(key, []);
             }
-            projectsMap.get(dir)!.push(session);
+            projectsMap.get(key)!.push(session);
         }
 
         const projectNodes: ProjectNode[] = [];
-        for (const [dir, projectSessions] of projectsMap.entries()) {
-            const folderMeta = foldersData.find(f => f.directory === dir) || {
-                directory: dir,
+        for (const [key, projectSessions] of projectsMap.entries()) {
+            const folderMeta = foldersData.find(f => (f.workspace_id || f.directory) === key) || {
+                workspace_id: projectSessions[0]?.workspace_id || null,
+                directory: projectSessions[0]?.directory || key,
                 is_pinned: false,
                 note: null,
                 labels: []
             };
 
+            const dir = folderMeta.directory || '(No Directory)';
             const folderName = dir === '(No Directory)' ? dir : path.basename(dir);
             projectNodes.push(new ProjectNode(folderName, projectSessions.map(s => new SessionItemNode(s)), folderMeta));
         }

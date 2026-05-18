@@ -119,37 +119,37 @@ class OsmService {
             vscode.window.showErrorMessage(`Failed to delete session. Error: ${error.message}`);
         }
     }
-    async pinSession(sid, pin) {
+    async pinSession(sid, pin, type = 'session') {
         const flag = pin ? '--pin' : '--unpin';
         try {
-            await this.executeBackend(`--json ${flag} "${sid}"`);
+            await this.executeBackend(`--json ${flag} "${sid}" --type ${type}`);
         }
         catch (error) {
-            vscode.window.showErrorMessage(`Failed to pin/unpin session. Error: ${error.message}`);
+            vscode.window.showErrorMessage(`Failed to pin/unpin. Error: ${error.message}`);
         }
     }
-    async setNote(sid, note) {
+    async setNote(sid, note, type = 'session') {
         const safeNote = note.replace(/"/g, '\\"');
         try {
-            await this.executeBackend(`--json --set-note "${sid}" "${safeNote}"`);
+            await this.executeBackend(`--json --set-note "${sid}" "${safeNote}" --type ${type}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`Failed to set note. Error: ${error.message}`);
         }
     }
-    async addLabel(sid, label) {
+    async addLabel(sid, label, type = 'session') {
         const safeLabel = label.replace(/"/g, '\\"');
         try {
-            await this.executeBackend(`--json --add-label "${sid}" "${safeLabel}"`);
+            await this.executeBackend(`--json --add-label "${sid}" "${safeLabel}" --type ${type}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`Failed to add label. Error: ${error.message}`);
         }
     }
-    async removeLabel(sid, label) {
+    async removeLabel(sid, label, type = 'session') {
         const safeLabel = label.replace(/"/g, '\\"');
         try {
-            await this.executeBackend(`--json --remove-label "${sid}" "${safeLabel}"`);
+            await this.executeBackend(`--json --remove-label "${sid}" "${safeLabel}" --type ${type}`);
         }
         catch (error) {
             vscode.window.showErrorMessage(`Failed to remove label. Error: ${error.message}`);

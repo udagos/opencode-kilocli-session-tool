@@ -121,8 +121,8 @@ export function activate(context: vscode.ExtensionContext) {
             targetId = node.session.sid;
             willPin = !node.session.is_pinned;
         } else if (node.folderMeta) {
-            targetId = node.folderMeta.directory;
-            targetType = 'folder';
+            targetId = node.folderMeta.workspace_id || node.folderMeta.directory;
+            targetType = 'workspace';
             willPin = !node.folderMeta.is_pinned;
         } else {
             return;
@@ -144,8 +144,8 @@ export function activate(context: vscode.ExtensionContext) {
             targetId = node.session.sid;
             currentNote = node.session.note || '';
         } else if (node.folderMeta) {
-            targetId = node.folderMeta.directory;
-            targetType = 'folder';
+            targetId = node.folderMeta.workspace_id || node.folderMeta.directory;
+            targetType = 'workspace';
             currentNote = node.folderMeta.note || '';
         } else {
             return;
@@ -172,8 +172,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (node.session) {
             targetId = node.session.sid;
         } else if (node.folderMeta) {
-            targetId = node.folderMeta.directory;
-            targetType = 'folder';
+            targetId = node.folderMeta.workspace_id || node.folderMeta.directory;
+            targetType = 'workspace';
         } else {
             return;
         }
@@ -200,8 +200,8 @@ export function activate(context: vscode.ExtensionContext) {
             targetId = node.session.sid;
             labels = node.session.labels || [];
         } else if (node.folderMeta) {
-            targetId = node.folderMeta.directory;
-            targetType = 'folder';
+            targetId = node.folderMeta.workspace_id || node.folderMeta.directory;
+            targetType = 'workspace';
             labels = node.folderMeta.labels || [];
         } else {
             return;

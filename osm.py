@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ class Session:
     directory: str
     created_at: int | None
     updated_at: int | None
+    workspace_id: str | None = None
     is_pinned: bool = False
     note: str | None = None
     labels: list[str] = field(default_factory=list)
@@ -42,7 +44,8 @@ class Session:
         return cleaned or "(untitled)"
 
 @dataclass
-class FolderMeta:
+class WorkspaceMeta:
+    workspace_id: str | None
     directory: str
     is_pinned: bool = False
     note: str | None = None
@@ -92,6 +95,18 @@ def init_meta_db(meta_db_path: Path) -> None:
     meta_db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(meta_db_path) as conn:
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_workspaces (
+                session_id TEXT PRIMARY KEY,
+                workspace_id TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workspaces (
+                workspace_id TEXT PRIMARY KEY,
+                last_known_directory TEXT
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS pins (
                 session_id TEXT PRIMARY KEY,
                 pinned_at INTEGER
@@ -124,6 +139,77 @@ def init_meta_db(meta_db_path: Path) -> None:
             conn.execute("ALTER TABLE labels ADD COLUMN type TEXT DEFAULT 'session'")
         except sqlite3.OperationalError:
             pass
+
+        # Data migration: Convert type='folder' to type='workspace'
+        try:
+            # find all 'folder' types, check if they exist as a directory, and convert them
+            cursor = conn.execute("""
+                SELECT DISTINCT session_id FROM (
+                    SELECT session_id FROM pins WHERE type='folder'
+                    UNION SELECT session_id FROM notes WHERE type='folder'
+                    UNION SELECT session_id FROM labels WHERE type='folder'
+                )
+            """)
+            folder_dirs = [row[0] for row in cursor.fetchall()]
+
+            for d in folder_dirs:
+                if d and Path(d).exists():
+                    wid = resolve_workspace_id(d)
+                    if wid:
+                        conn.execute("UPDATE pins SET session_id = ?, type = 'workspace' WHERE session_id = ? AND type = 'folder'", (wid, d))
+                        conn.execute("UPDATE notes SET session_id = ?, type = 'workspace' WHERE session_id = ? AND type = 'folder'", (wid, d))
+                        conn.execute("UPDATE labels SET session_id = ?, type = 'workspace' WHERE session_id = ? AND type = 'folder'", (wid, d))
+                        conn.execute("INSERT OR REPLACE INTO workspaces (workspace_id, last_known_directory) VALUES (?, ?)", (wid, d))
+        except sqlite3.Error:
+            pass
+
+
+def resolve_workspace_id(directory: str) -> str | None:
+    if not directory:
+        return None
+    p = Path(directory).expanduser().resolve()
+
+    # Check if path still exists
+    if not p.exists():
+        return None
+
+    current = p
+    # Search upwards for .osm_workspace_id
+    while current.parent != current: # Stop at root
+        id_file = current / ".osm_workspace_id"
+        if id_file.exists() and id_file.is_file():
+            try:
+                with open(id_file, "r") as f:
+                    wid = f.read().strip()
+                    if wid:
+                        return wid
+            except Exception:
+                pass
+
+        # Check for project roots if we want to stop early, e.g. .git or .claude
+        if (current / ".git").exists() or (current / ".claude").exists():
+            break
+
+        current = current.parent
+
+    # Not found, generate one in the original directory requested
+    id_file = p / ".osm_workspace_id"
+    new_id = uuid.uuid4().hex
+    try:
+        id_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(id_file, "w") as f:
+            f.write(new_id)
+        # Also try to hide it on Windows
+        if os.name == 'nt':
+            try:
+                import ctypes
+                FILE_ATTRIBUTE_HIDDEN = 0x02
+                ret = ctypes.windll.kernel32.SetFileAttributesW(str(id_file), FILE_ATTRIBUTE_HIDDEN)
+            except Exception:
+                pass
+        return new_id
+    except Exception:
+        return None
 
 
 def detect_backend(preferred: str | None = None) -> tuple[str, Path, Path]:
@@ -172,7 +258,7 @@ def format_dt(value: int | None) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
-def load_folder_meta(app: str) -> list[FolderMeta]:
+def load_folder_meta(app: str) -> list[WorkspaceMeta]:
     meta_db_path = resolve_meta_db_path(app)
     if not meta_db_path.exists():
         return []
@@ -181,17 +267,19 @@ def load_folder_meta(app: str) -> list[FolderMeta]:
         with sqlite3.connect(meta_db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
-                SELECT 
-                    COALESCE(p.session_id, n.session_id, l.session_id) as directory,
+                SELECT
+                    COALESCE(p.session_id, n.session_id, l.session_id) as workspace_id,
+                    w.last_known_directory as directory,
                     p.pinned_at,
                     n.note,
                     GROUP_CONCAT(l.label) as labels
-                FROM (SELECT DISTINCT session_id FROM pins WHERE type='folder'
-                      UNION SELECT DISTINCT session_id FROM notes WHERE type='folder'
-                      UNION SELECT DISTINCT session_id FROM labels WHERE type='folder') as all_ids
-                LEFT JOIN pins p ON all_ids.session_id = p.session_id AND p.type='folder'
-                LEFT JOIN notes n ON all_ids.session_id = n.session_id AND n.type='folder'
-                LEFT JOIN labels l ON all_ids.session_id = l.session_id AND l.type='folder'
+                FROM (SELECT DISTINCT session_id FROM pins WHERE type='workspace' OR type='folder'
+                      UNION SELECT DISTINCT session_id FROM notes WHERE type='workspace' OR type='folder'
+                      UNION SELECT DISTINCT session_id FROM labels WHERE type='workspace' OR type='folder') as all_ids
+                LEFT JOIN pins p ON all_ids.session_id = p.session_id AND (p.type='workspace' OR p.type='folder')
+                LEFT JOIN notes n ON all_ids.session_id = n.session_id AND (n.type='workspace' OR n.type='folder')
+                LEFT JOIN labels l ON all_ids.session_id = l.session_id AND (l.type='workspace' OR l.type='folder')
+                LEFT JOIN workspaces w ON all_ids.session_id = w.workspace_id
                 GROUP BY all_ids.session_id
             """).fetchall()
     except sqlite3.Error:
@@ -202,7 +290,8 @@ def load_folder_meta(app: str) -> list[FolderMeta]:
         labels_raw = row["labels"]
         labels_list = labels_raw.split(",") if labels_raw else []
         folders.append(
-            FolderMeta(
+            WorkspaceMeta(
+                workspace_id=str(row["workspace_id"] or ""),
                 directory=str(row["directory"] or ""),
                 is_pinned=bool(row["pinned_at"]),
                 note=row["note"],
@@ -216,10 +305,34 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
     db_path = resolve_db_path(app)
     if not db_path.exists():
         return []
-    
+
     meta_db_path = resolve_meta_db_path(app)
     init_meta_db(meta_db_path)
-    
+
+    # Sync directories to workspace_ids
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.execute("SELECT DISTINCT directory FROM session WHERE directory IS NOT NULL AND directory != ''")
+            directories = [row[0] for row in cursor.fetchall()]
+
+        if directories:
+            with sqlite3.connect(meta_db_path) as meta_conn:
+                for d in directories:
+                    wid = resolve_workspace_id(d)
+                    if wid:
+                        meta_conn.execute("INSERT OR REPLACE INTO workspaces (workspace_id, last_known_directory) VALUES (?, ?)", (wid, d))
+
+                        # We also need to map the sessions for this directory to this workspace_id
+                        with sqlite3.connect(db_path) as conn:
+                            sess_cursor = conn.execute("SELECT id FROM session WHERE directory = ?", (d,))
+                            sess_ids = [r[0] for r in sess_cursor.fetchall()]
+
+                        for sid in sess_ids:
+                            meta_conn.execute("INSERT OR REPLACE INTO session_workspaces (session_id, workspace_id) VALUES (?, ?)", (sid, wid))
+                meta_conn.commit()
+    except sqlite3.Error:
+        pass
+
     valid_sort_fields = {"time_updated": "s.time_updated", "time_created": "s.time_created", "title": "s.title"}
     sort_field = valid_sort_fields.get(sort_by, "s.time_updated")
     sort_order = "ASC" if sort_order.upper() == "ASC" else "DESC"
@@ -228,14 +341,16 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute(f"ATTACH DATABASE '{str(meta_db_path)}' AS meta")
-            
+
             if search_query:
                 query = f"""
-                    SELECT 
+                    SELECT
                         s.id, s.title, s.directory, s.time_created, s.time_updated,
+                        sw.workspace_id,
                         p.pinned_at, n.note, GROUP_CONCAT(l.label) as labels
                     FROM session s
                     LEFT JOIN message m ON s.id = m.session_id
+                    LEFT JOIN meta.session_workspaces sw ON s.id = sw.session_id
                     LEFT JOIN meta.pins p ON s.id = p.session_id AND (p.type = 'session' OR p.type IS NULL)
                     LEFT JOIN meta.notes n ON s.id = n.session_id AND (n.type = 'session' OR n.type IS NULL)
                     LEFT JOIN meta.labels l ON s.id = l.session_id AND (l.type = 'session' OR l.type IS NULL)
@@ -247,10 +362,12 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
                 rows = conn.execute(query, (like_term, like_term)).fetchall()
             else:
                 query = f"""
-                    SELECT 
+                    SELECT
                         s.id, s.title, s.directory, s.time_created, s.time_updated,
+                        sw.workspace_id,
                         p.pinned_at, n.note, GROUP_CONCAT(l.label) as labels
                     FROM session s
+                    LEFT JOIN meta.session_workspaces sw ON s.id = sw.session_id
                     LEFT JOIN meta.pins p ON s.id = p.session_id AND (p.type = 'session' OR p.type IS NULL)
                     LEFT JOIN meta.notes n ON s.id = n.session_id AND (n.type = 'session' OR n.type IS NULL)
                     LEFT JOIN meta.labels l ON s.id = l.session_id AND (l.type = 'session' OR l.type IS NULL)
@@ -260,7 +377,7 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
                 rows = conn.execute(query).fetchall()
     except sqlite3.Error:
         return []
-        
+
     sessions: list[Session] = []
     for row in rows:
         labels_raw = row["labels"]
@@ -272,6 +389,7 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
                 directory=str(row["directory"] or ""),
                 created_at=int(row["time_created"]) if row["time_created"] is not None else None,
                 updated_at=int(row["time_updated"]) if row["time_updated"] is not None else None,
+                workspace_id=str(row["workspace_id"]) if "workspace_id" in row.keys() and row["workspace_id"] is not None else None,
                 is_pinned=bool(row["pinned_at"]),
                 note=row["note"],
                 labels=labels_list
@@ -463,7 +581,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--sort-order", choices=["DESC", "ASC"], default="DESC", help="Sort order")
     
     # Meta actions
-    parser.add_argument("--type", choices=["session", "folder"], default="session", help="Type of metadata target")
+    parser.add_argument("--type", choices=["session", "folder", "workspace"], default="session", help="Type of metadata target")
     parser.add_argument("--pin", metavar="ID", help="Pin a session or folder")
     parser.add_argument("--unpin", metavar="ID", help="Unpin a session or folder")
     parser.add_argument("--set-note", nargs=2, metavar=("ID", "NOTE"), help="Set a note for a session or folder")

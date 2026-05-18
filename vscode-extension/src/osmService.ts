@@ -11,6 +11,15 @@ export interface ISession {
     directory: string;
     created_at: number | null;
     updated_at: number | null;
+    workspace_id: string | null;
+    is_pinned: boolean;
+    note: string | null;
+    labels: string[];
+}
+
+export interface IFolderMeta {
+    directory: string;
+    workspace_id: string | null;
     is_pinned: boolean;
     note: string | null;
     labels: string[];
