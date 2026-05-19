@@ -142,7 +142,11 @@ class SessionTreeProvider {
     getProjectNodes(sessions, foldersData) {
         const projectsMap = new Map();
         for (const session of sessions) {
-            const key = session.workspace_id || session.directory || '(No Directory)';
+            // Force strict check for null/undefined strings
+            let key = session.workspace_id;
+            if (!key || key === 'null' || key === 'undefined') {
+                key = session.directory || '(No Directory)';
+            }
             if (!projectsMap.has(key)) {
                 projectsMap.set(key, []);
             }
@@ -150,13 +154,26 @@ class SessionTreeProvider {
         }
         const projectNodes = [];
         for (const [key, projectSessions] of projectsMap.entries()) {
-            const folderMeta = foldersData.find(f => (f.workspace_id || f.directory) === key) || {
-                workspace_id: projectSessions[0]?.workspace_id || null,
-                directory: projectSessions[0]?.directory || key,
-                is_pinned: false,
-                note: null,
-                labels: []
-            };
+            const isWorkspaceId = key !== '(No Directory)' && !key.includes('\\') && !key.includes('/');
+            let folderMeta;
+            if (isWorkspaceId) {
+                folderMeta = foldersData.find(f => f.workspace_id === key) || {
+                    workspace_id: key,
+                    directory: projectSessions[0]?.directory || '(No Directory)',
+                    is_pinned: false,
+                    note: null,
+                    labels: []
+                };
+            }
+            else {
+                folderMeta = foldersData.find(f => f.directory === key) || {
+                    workspace_id: null,
+                    directory: key,
+                    is_pinned: false,
+                    note: null,
+                    labels: []
+                };
+            }
             const dir = folderMeta.directory || '(No Directory)';
             const folderName = dir === '(No Directory)' ? dir : path.basename(dir);
             projectNodes.push(new ProjectNode(folderName, projectSessions.map(s => new SessionItemNode(s)), folderMeta));
