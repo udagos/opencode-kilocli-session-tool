@@ -45,6 +45,10 @@ class OsmService {
         const pythonPath = config.get('pythonPath') || 'python';
         const scriptPath = config.get('scriptPath') || 'osm';
         if (scriptPath.endsWith('.py')) {
+            // Check if pythonPath is already a composite command like "uv run python"
+            if (pythonPath.includes(' ')) {
+                return `${pythonPath} "${scriptPath}" ${backend}`;
+            }
             return `"${pythonPath}" "${scriptPath}" ${backend}`;
         }
         return `"${scriptPath}" ${backend}`;
