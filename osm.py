@@ -330,6 +330,29 @@ def load_sessions(app: str, search_query: str | None = None, sort_by: str = "tim
                         for sid in sess_ids:
                             meta_conn.execute("INSERT OR REPLACE INTO session_workspaces (session_id, workspace_id) VALUES (?, ?)", (sid, wid))
                 meta_conn.commit()
+
+            # Update main database sessions with the latest known directory for their workspace
+            with sqlite3.connect(db_path, timeout=5.0) as db_conn:
+                db_conn.execute(f"ATTACH DATABASE '{str(meta_db_path)}' AS meta")
+                db_conn.execute("""
+                    UPDATE session
+                    SET directory = (
+                        SELECT w.last_known_directory
+                        FROM meta.session_workspaces sw
+                        JOIN meta.workspaces w ON sw.workspace_id = w.workspace_id
+                        WHERE sw.session_id = session.id
+                    )
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM meta.session_workspaces sw
+                        JOIN meta.workspaces w ON sw.workspace_id = w.workspace_id
+                        WHERE sw.session_id = session.id
+                        AND w.last_known_directory IS NOT NULL
+                        AND w.last_known_directory != ''
+                        AND session.directory != w.last_known_directory
+                    )
+                """)
+                db_conn.commit()
     except sqlite3.Error:
         pass
 
