@@ -44,11 +44,18 @@ function activate(context) {
     const osmService = new osmService_1.OsmService();
     const sessionTreeProvider = new sessionTreeProvider_1.SessionTreeProvider(osmService);
     const sessionContentProvider = new sessionContentProvider_1.SessionContentProvider(osmService);
+    const syncCurrentWorkspace = async () => {
+        const directories = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        await osmService.syncWorkspaceDirectories(directories);
+    };
     // Register Providers
-    vscode.window.registerTreeDataProvider('osm.sessionsView', sessionTreeProvider);
-    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('osm-session', sessionContentProvider));
+    const treeView = vscode.window.createTreeView('osm.sessionsView', {
+        treeDataProvider: sessionTreeProvider
+    });
+    context.subscriptions.push(treeView, vscode.workspace.registerTextDocumentContentProvider('osm-session', sessionContentProvider));
     // Command: Refresh
-    const refreshCommand = vscode.commands.registerCommand('osm.refresh', () => {
+    const refreshCommand = vscode.commands.registerCommand('osm.refresh', async () => {
+        await syncCurrentWorkspace();
         sessionTreeProvider.refresh();
     });
     // Command: Search
@@ -229,7 +236,16 @@ function activate(context) {
             sessionTreeProvider.refresh();
         }
     });
-    context.subscriptions.push(refreshCommand, searchCommand, clearSearchCommand, setSortCommand, resumeCommand, viewContentCommand, deleteCommand, pinCommand, setNoteCommand, addLabelCommand, removeLabelCommand);
+    context.subscriptions.push(refreshCommand, searchCommand, clearSearchCommand, setSortCommand, resumeCommand, viewContentCommand, deleteCommand, pinCommand, setNoteCommand, addLabelCommand, removeLabelCommand, treeView.onDidChangeVisibility(async (e) => {
+        if (!e.visible) {
+            return;
+        }
+        await syncCurrentWorkspace();
+        sessionTreeProvider.refresh();
+    }), vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+        await syncCurrentWorkspace();
+        sessionTreeProvider.refresh();
+    }));
 }
 function deactivate() { }
 //# sourceMappingURL=extension.js.map

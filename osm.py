@@ -485,6 +485,106 @@ def execute_meta_update(app: str, query: str, params: tuple) -> None:
         print(json.dumps({"status": "error", "message": str(e)}))
 
 
+def sync_workspace_directory(app: str, directory: str) -> None:
+    directory = (directory or "").strip()
+    if not directory:
+        print(json.dumps({"status": "error", "message": "Directory is required"}))
+        return
+
+    db_path = resolve_db_path(app)
+    meta_db_path = resolve_meta_db_path(app)
+    init_meta_db(meta_db_path)
+
+    wid = resolve_workspace_id(directory)
+    if not wid:
+        print(json.dumps({"status": "error", "message": "Could not resolve workspace id"}))
+        return
+
+    old_wids: list[str] = []
+    try:
+        with sqlite3.connect(meta_db_path) as meta_conn:
+            meta_conn.row_factory = sqlite3.Row
+
+            rows = meta_conn.execute(
+                "SELECT workspace_id, last_known_directory FROM workspaces WHERE workspace_id != ?",
+                (wid,),
+            ).fetchall()
+
+            current_name = Path(directory).name.casefold()
+            current_marker = Path(directory) / ".osm_workspace_id"
+            current_parent = str(Path(directory).parent).casefold()
+
+            for row in rows:
+                old_wid = row["workspace_id"]
+                old_dir = row["last_known_directory"]
+                if not old_wid or not old_dir:
+                    continue
+
+                old_path = Path(old_dir)
+                old_name = old_path.name.casefold()
+                same_name = old_name == current_name
+                same_parent = str(old_path.parent).casefold() == current_parent
+                old_exists = old_path.exists()
+                old_marker = old_path / ".osm_workspace_id"
+                marker_matches = old_marker.exists() and current_marker.exists() and old_marker.read_text(errors="ignore").strip() == wid
+                moved_same_project = same_name and not old_exists
+
+                if marker_matches or (same_name and same_parent) or moved_same_project:
+                    old_wids.append(old_wid)
+
+            old_wids = sorted(set(old_wids))
+
+            meta_conn.execute(
+                "INSERT OR REPLACE INTO workspaces (workspace_id, last_known_directory) VALUES (?, ?)",
+                (wid, directory),
+            )
+
+            for old_wid in old_wids:
+                meta_conn.execute(
+                    "INSERT OR REPLACE INTO session_workspaces (session_id, workspace_id) SELECT session_id, ? FROM session_workspaces WHERE workspace_id = ?",
+                    (wid, old_wid),
+                )
+                meta_conn.execute(
+                    "INSERT OR REPLACE INTO pins (session_id, pinned_at, type) SELECT ?, pinned_at, 'workspace' FROM pins WHERE session_id = ? AND type IN ('workspace', 'folder')",
+                    (wid, old_wid),
+                )
+                meta_conn.execute(
+                    "INSERT OR REPLACE INTO notes (session_id, note, updated_at, type) SELECT ?, note, updated_at, 'workspace' FROM notes WHERE session_id = ? AND type IN ('workspace', 'folder')",
+                    (wid, old_wid),
+                )
+                meta_conn.execute(
+                    "INSERT OR IGNORE INTO labels (session_id, label, type) SELECT ?, label, 'workspace' FROM labels WHERE session_id = ? AND type IN ('workspace', 'folder')",
+                    (wid, old_wid),
+                )
+                meta_conn.execute("DELETE FROM pins WHERE session_id = ? AND type IN ('workspace', 'folder')", (old_wid,))
+                meta_conn.execute("DELETE FROM notes WHERE session_id = ? AND type IN ('workspace', 'folder')", (old_wid,))
+                meta_conn.execute("DELETE FROM labels WHERE session_id = ? AND type IN ('workspace', 'folder')", (old_wid,))
+                meta_conn.execute("DELETE FROM workspaces WHERE workspace_id = ?", (old_wid,))
+
+            meta_conn.commit()
+
+        if db_path.exists():
+            with sqlite3.connect(db_path, timeout=5.0) as db_conn:
+                db_conn.execute(f"ATTACH DATABASE '{str(meta_db_path)}' AS meta")
+                db_conn.execute(
+                    """
+                    UPDATE session
+                    SET directory = ?
+                    WHERE id IN (
+                        SELECT session_id
+                        FROM meta.session_workspaces
+                        WHERE workspace_id = ?
+                    )
+                    """,
+                    (directory, wid),
+                )
+                db_conn.commit()
+
+        print(json.dumps({"status": "ok", "workspace_id": wid, "directory": directory, "merged_workspace_ids": old_wids}))
+    except (sqlite3.Error, OSError) as e:
+        print(json.dumps({"status": "error", "message": str(e)}))
+
+
 def build_resume_command(app: str, session_id: str) -> str:
     if app.lower() == "kilo":
         return f"kilo resume {session_id}"
@@ -610,6 +710,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--set-note", nargs=2, metavar=("ID", "NOTE"), help="Set a note for a session or folder")
     parser.add_argument("--add-label", nargs=2, metavar=("ID", "LABEL"), help="Add a label to a session or folder")
     parser.add_argument("--remove-label", nargs=2, metavar=("ID", "LABEL"), help="Remove a label from a session or folder")
+    parser.add_argument("--sync-workspace-dir", action="append", metavar="DIR", help="Sync a workspace directory to its existing workspace id")
 
     args, unknown = parser.parse_known_args(list(sys.argv[1:] if argv is None else argv))
     
@@ -653,6 +754,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.remove_label:
         target_id, lbl = args.remove_label
         execute_meta_update(backend, "DELETE FROM labels WHERE session_id = ? AND label = ? AND type = ?", (target_id, lbl.strip(), args.type))
+        return 0
+
+    if args.sync_workspace_dir:
+        for directory in args.sync_workspace_dir:
+            sync_workspace_directory(backend, directory)
         return 0
 
     if args.json:

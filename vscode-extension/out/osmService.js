@@ -159,6 +159,22 @@ class OsmService {
             vscode.window.showErrorMessage(`Failed to remove label. Error: ${error.message}`);
         }
     }
+    async syncWorkspaceDirectories(directories) {
+        const uniqueDirectories = Array.from(new Set(directories.map(dir => dir.trim()).filter(Boolean)));
+        if (uniqueDirectories.length === 0) {
+            return;
+        }
+        for (const directory of uniqueDirectories) {
+            const safeDirectory = directory.replace(/"/g, '\\"');
+            try {
+                const result = await this.executeBackend(`--json --sync-workspace-dir "${safeDirectory}"`);
+                console.log('OSM workspace sync result:', result);
+            }
+            catch (error) {
+                console.warn('Failed to sync workspace directory:', directory, error);
+            }
+        }
+    }
 }
 exports.OsmService = OsmService;
 //# sourceMappingURL=osmService.js.map

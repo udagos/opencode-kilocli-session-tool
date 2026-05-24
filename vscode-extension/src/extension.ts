@@ -10,14 +10,23 @@ export function activate(context: vscode.ExtensionContext) {
     const sessionTreeProvider = new SessionTreeProvider(osmService);
     const sessionContentProvider = new SessionContentProvider(osmService);
 
+    const syncCurrentWorkspace = async () => {
+        const directories = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        await osmService.syncWorkspaceDirectories(directories);
+    };
+
     // Register Providers
-    vscode.window.registerTreeDataProvider('osm.sessionsView', sessionTreeProvider);
+    const treeView = vscode.window.createTreeView('osm.sessionsView', {
+        treeDataProvider: sessionTreeProvider
+    });
     context.subscriptions.push(
+        treeView,
         vscode.workspace.registerTextDocumentContentProvider('osm-session', sessionContentProvider)
     );
 
     // Command: Refresh
-    const refreshCommand = vscode.commands.registerCommand('osm.refresh', () => {
+    const refreshCommand = vscode.commands.registerCommand('osm.refresh', async () => {
+        await syncCurrentWorkspace();
         sessionTreeProvider.refresh();
     });
 
@@ -233,7 +242,19 @@ export function activate(context: vscode.ExtensionContext) {
         pinCommand,
         setNoteCommand,
         addLabelCommand,
-        removeLabelCommand
+        removeLabelCommand,
+        treeView.onDidChangeVisibility(async (e) => {
+            if (!e.visible) {
+                return;
+            }
+
+            await syncCurrentWorkspace();
+            sessionTreeProvider.refresh();
+        }),
+        vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+            await syncCurrentWorkspace();
+            sessionTreeProvider.refresh();
+        })
     );
 }
 
